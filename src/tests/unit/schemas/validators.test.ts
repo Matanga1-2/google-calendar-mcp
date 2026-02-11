@@ -46,7 +46,6 @@ describe('UpdateEventArgumentsSchema with Recurring Event Support', () => {
         summary: 'Updated Meeting',
         description: 'Updated description',
         location: 'New Location',
-        colorId: '9',
         start: '2024-06-15T10:00:00',
         end: '2024-06-15T11:00:00'
       };
@@ -55,7 +54,6 @@ describe('UpdateEventArgumentsSchema with Recurring Event Support', () => {
       expect(result.summary).toBe('Updated Meeting');
       expect(result.description).toBe('Updated description');
       expect(result.location).toBe('New Location');
-      expect(result.colorId).toBe('9');
     });
   });
 
@@ -281,18 +279,10 @@ describe('UpdateEventArgumentsSchema with Recurring Event Support', () => {
         location: 'New Conference Room',
         start: '2024-06-15T10:00:00',
         end: '2024-06-15T11:00:00',
-        colorId: '9',
         attendees: [
           { email: 'user1@example.com' },
           { email: 'user2@example.com' }
         ],
-        reminders: {
-          useDefault: false,
-          overrides: [
-            { method: 'email', minutes: 1440 },
-            { method: 'popup', minutes: 10 }
-          ]
-        },
         recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO']
       };
 
@@ -465,59 +455,7 @@ describe('Array parameter JSON string preprocessing', () => {
     });
   });
 
-  describe('calendarsToCheck parameter', () => {
-    it('should parse JSON string of calendars into array', () => {
-      const input = {
-        calendarId: 'primary',
-        summary: 'Test Event',
-        start: '2024-01-01T10:00:00',
-        end: '2024-01-01T11:00:00',
-        calendarsToCheck: '["primary", "work@example.com"]'
-      };
-
-      const result = CreateEventSchema.parse(input);
-      expect(result.calendarsToCheck).toEqual(['primary', 'work@example.com']);
-    });
-
-    it('should parse single-quoted JSON string (Python style)', () => {
-      const input = {
-        calendarId: 'primary',
-        summary: 'Test Event',
-        start: '2024-01-01T10:00:00',
-        end: '2024-01-01T11:00:00',
-        calendarsToCheck: "['primary', 'work@example.com']"
-      };
-
-      const result = CreateEventSchema.parse(input);
-      expect(result.calendarsToCheck).toEqual(['primary', 'work@example.com']);
-    });
-
-    it('should accept native array of calendars', () => {
-      const input = {
-        calendarId: 'primary',
-        summary: 'Test Event',
-        start: '2024-01-01T10:00:00',
-        end: '2024-01-01T11:00:00',
-        calendarsToCheck: ['primary', 'work@example.com']
-      };
-
-      const result = CreateEventSchema.parse(input);
-      expect(result.calendarsToCheck).toEqual(['primary', 'work@example.com']);
-    });
-
-    it('should handle JSON string with whitespace', () => {
-      const input = {
-        calendarId: 'primary',
-        summary: 'Test Event',
-        start: '2024-01-01T10:00:00',
-        end: '2024-01-01T11:00:00',
-        calendarsToCheck: '  ["primary", "work@example.com"]  '
-      };
-
-      const result = CreateEventSchema.parse(input);
-      expect(result.calendarsToCheck).toEqual(['primary', 'work@example.com']);
-    });
-  });
+  // calendarsToCheck removed from simplified schema
 
   describe('recurrence parameter', () => {
     it('should parse JSON string of recurrence rules into array', () => {
