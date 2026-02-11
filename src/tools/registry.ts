@@ -19,31 +19,22 @@ import { RespondToEventHandler } from "../handlers/core/RespondToEventHandler.js
 import { SetOutOfOfficeHandler } from "../handlers/core/SetOutOfOfficeHandler.js";
 import { SetWorkingLocationHandler } from "../handlers/core/SetWorkingLocationHandler.js";
 
-// Define shared schema fields for reuse
-// Note: Event datetime fields (start/end) are NOT shared to avoid $ref generation
-// Each tool defines its own inline schemas for these fields
+// Shared datetime validation regex
+const ISO8601_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})?$/;
+const ISO8601_DATE_OR_DATETIME = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})?)?$/;
 
+// Simplified shared schemas with shorter descriptions
 const timeMinSchema = z.string()
-  .refine((val) => {
-    const withTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/.test(val);
-    const withoutTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(val);
-    return withTimezone || withoutTimezone;
-  }, "Must be ISO 8601 format: '2026-01-01T00:00:00'")
-  .describe("Start time boundary. Preferred: '2024-01-01T00:00:00' (uses timeZone parameter or calendar timezone). Also accepts: '2024-01-01T00:00:00Z' or '2024-01-01T00:00:00-08:00'.")
+  .refine((val) => ISO8601_DATETIME.test(val), "ISO 8601 format required")
+  .describe("Start boundary (e.g., '2024-01-01T00:00:00')")
   .optional();
 
 const timeMaxSchema = z.string()
-  .refine((val) => {
-    const withTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/.test(val);
-    const withoutTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(val);
-    return withTimezone || withoutTimezone;
-  }, "Must be ISO 8601 format: '2026-01-01T00:00:00'")
-  .describe("End time boundary. Preferred: '2024-01-01T23:59:59' (uses timeZone parameter or calendar timezone). Also accepts: '2024-01-01T23:59:59Z' or '2024-01-01T23:59:59-08:00'.")
+  .refine((val) => ISO8601_DATETIME.test(val), "ISO 8601 format required")
+  .describe("End boundary (e.g., '2024-01-01T23:59:59')")
   .optional();
 
-const timeZoneSchema = z.string().optional().describe(
-  "Timezone as IANA Time Zone Database name (e.g., America/Los_Angeles). Takes priority over calendar's default timezone. Only used for timezone-naive datetime strings."
-);
+const timeZoneSchema = z.string().optional().describe("IANA timezone (e.g., America/Los_Angeles)");
 
 // Generic helper to parse JSON string arrays
 const parseJsonStringArray = (val: unknown): unknown => {
@@ -51,7 +42,6 @@ const parseJsonStringArray = (val: unknown): unknown => {
   const trimmed = val.trim();
   if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
     try {
-      // Handle single-quoted JSON-like strings (Python/shell style)
       let jsonString = trimmed;
       if (jsonString.includes("'")) {
         jsonString = jsonString
@@ -60,12 +50,8 @@ const parseJsonStringArray = (val: unknown): unknown => {
           .replace(/'\s*\]/g, '"]');
       }
       const parsed = JSON.parse(jsonString);
-      if (Array.isArray(parsed)) {
-        return parsed;
-      }
-    } catch {
-      // Fall through to return original value
-    }
+      if (Array.isArray(parsed)) return parsed;
+    } catch { /* fall through */ }
   }
   return val;
 };
@@ -73,57 +59,21 @@ const parseJsonStringArray = (val: unknown): unknown => {
 const fieldsSchema = z.preprocess(
   parseJsonStringArray,
   z.array(z.enum(ALLOWED_EVENT_FIELDS))
-).optional().describe(
-  "Optional array of additional event fields to retrieve. Available fields are strictly validated. Default fields (id, summary, start, end, status, htmlLink, location, attendees) are always included."
-);
-
-const calendarsToCheckSchema = z.preprocess(
-  parseJsonStringArray,
-  z.array(z.string())
-).optional().describe(
-  "List of calendar IDs to check for conflicts (defaults to just the target calendar)"
-);
+).optional().describe("Additional fields to retrieve");
 
 const recurrenceSchema = z.preprocess(
   parseJsonStringArray,
   z.array(z.string())
-).optional().describe(
-  "Recurrence rules in RFC5545 format (e.g., [\"RRULE:FREQ=WEEKLY;COUNT=5\"])"
-);
+).optional().describe("RFC5545 recurrence rules (e.g., [\"RRULE:FREQ=WEEKLY;COUNT=5\"])");
 
-const privateExtendedPropertySchema = z
-  .array(z.string().regex(/^[^=]+=[^=]+$/, "Must be in key=value format"))
-  .optional()
-  .describe(
-    "Filter by private extended properties (key=value). Matches events that have all specified properties."
-  );
-
-const sharedExtendedPropertySchema = z
-  .array(z.string().regex(/^[^=]+=[^=]+$/, "Must be in key=value format"))
-  .optional()
-  .describe(
-    "Filter by shared extended properties (key=value). Matches events that have all specified properties."
-  );
-
-// Single account schema - for write operations (create, update, delete)
-const singleAccountSchema = z.string()
-  .regex(/^[a-z0-9_-]{1,64}$/, "Account nickname must be 1-64 characters: lowercase letters, numbers, dashes, underscores only")
-  .optional()
-  .describe(
-    "Account nickname to use for this operation (e.g., 'work', 'personal') - the friendly name you gave when connecting the account. Optional when only one account is connected - will auto-select the account with appropriate permissions. Use 'list-calendars' to see available accounts."
-  );
-
-// Account ID validation regex
+// Account schemas - simplified descriptions
 const accountIdRegex = /^[a-z0-9_-]{1,64}$/;
 
-// Helper to parse JSON string arrays for account parameter
 const parseAccountJsonString = (val: unknown): unknown => {
   if (typeof val !== 'string') return val;
   const trimmed = val.trim();
-  // Check if it looks like a JSON array
   if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
     try {
-      // Handle single-quoted JSON-like strings (Python/shell style)
       let jsonString = trimmed;
       if (jsonString.includes("'")) {
         jsonString = jsonString
@@ -132,34 +82,26 @@ const parseAccountJsonString = (val: unknown): unknown => {
           .replace(/'\s*\]/g, '"]');
       }
       const parsed = JSON.parse(jsonString);
-      if (Array.isArray(parsed) && parsed.every(id => typeof id === 'string')) {
-        return parsed;
-      }
-    } catch {
-      // Fall through to return original value
-    }
+      if (Array.isArray(parsed) && parsed.every(id => typeof id === 'string')) return parsed;
+    } catch { /* fall through */ }
   }
   return val;
 };
 
-// Multi-account schema - for read operations (list, search, get)
+const singleAccountSchema = z.string()
+  .regex(accountIdRegex)
+  .optional()
+  .describe("Account nickname (e.g., 'work'). Auto-selects if only one account.");
+
 const multiAccountSchema = z.preprocess(
   parseAccountJsonString,
   z.union([
-    z.string()
-      .regex(accountIdRegex, "Account nickname must be 1-64 characters: lowercase letters, numbers, dashes, underscores only"),
-    z.array(z.string()
-      .regex(accountIdRegex, "Account nickname must be 1-64 characters: lowercase letters, numbers, dashes, underscores only"))
-      .min(1, "At least one account nickname is required")
-      .max(10, "Maximum 10 accounts allowed per request")
+    z.string().regex(accountIdRegex),
+    z.array(z.string().regex(accountIdRegex)).min(1).max(10)
   ])
-)
-  .optional()
-  .describe(
-    "Account nickname(s) to query (e.g., 'work' or ['work', 'personal']) - the friendly names you gave when connecting accounts. Optional - if omitted, queries all connected accounts and merges results. Use 'list-calendars' to see available accounts."
-  );
+).optional().describe("Account(s) to query. Omit to query all.");
 
-// Define all tool schemas with TypeScript inference
+// Tool Schemas - SIMPLIFIED for reduced token usage
 export const ToolSchemas = {
   'list-calendars': z.object({
     account: multiAccountSchema
@@ -168,535 +110,184 @@ export const ToolSchemas = {
   'list-events': z.object({
     account: multiAccountSchema,
     calendarId: z.union([
-      z.string().describe(
-        "Calendar identifier(s) to query. Accepts calendar IDs (e.g., 'primary', 'user@gmail.com') OR calendar names (e.g., 'Work', 'Personal'). Single calendar: 'primary'. Multiple calendars: array ['Work', 'Personal'] or JSON string '[\"Work\", \"Personal\"]'"
-      ),
-      z.array(z.string().min(1))
-        .min(1, "At least one calendar ID is required")
-        .max(50, "Maximum 50 calendars allowed per request")
-        .refine(
-          (arr) => new Set(arr).size === arr.length,
-          "Duplicate calendar IDs are not allowed"
-        )
-        .describe("Array of calendar IDs to query events from (max 50, no duplicates)")
-    ]),
+      z.string(),
+      z.array(z.string().min(1)).min(1).max(50)
+    ]).describe("Calendar ID(s) or name(s). Use 'primary' for main calendar."),
     timeMin: timeMinSchema,
     timeMax: timeMaxSchema,
     timeZone: timeZoneSchema,
-    fields: fieldsSchema,
-    privateExtendedProperty: privateExtendedPropertySchema,
-    sharedExtendedProperty: sharedExtendedPropertySchema
+    fields: fieldsSchema
   }),
-  
+
   'search-events': z.object({
     account: multiAccountSchema,
-    calendarId: z.union([
-      z.string().describe(
-        "Calendar identifier(s) to search. Accepts calendar IDs (e.g., 'primary', 'user@gmail.com') OR calendar names (e.g., 'Work', 'Personal'). Single calendar: 'primary'. Multiple calendars: array ['Work', 'Personal'] or JSON string '[\"Work\", \"Personal\"]'"
-      ),
-      z.array(z.string())
-    ]).transform((val) => {
-      if (typeof val === 'string') {
-        // Try to parse JSON array if it looks like one
-        if (val.startsWith('[')) {
-          try {
-            const parsed = JSON.parse(val);
-            if (Array.isArray(parsed)) return parsed;
-          } catch { /* ignore */ }
-        }
-        return val;
+    calendarId: z.union([z.string(), z.array(z.string())]).transform((val) => {
+      if (typeof val === 'string' && val.startsWith('[')) {
+        try { const p = JSON.parse(val); if (Array.isArray(p)) return p; } catch { /* ignore */ }
       }
       return val;
-    }).describe("Calendar identifier(s) to search. Accepts calendar IDs or names. Single or multiple calendars supported."),
-    query: z.string().describe(
-      "Free text search query (searches summary, description, location, attendees, etc.)"
-    ),
-    timeMin: z.string()
-      .refine((val) => {
-        const withTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/.test(val);
-        const withoutTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(val);
-        return withTimezone || withoutTimezone;
-      }, "Must be ISO 8601 format: '2026-01-01T00:00:00'")
-      .describe("Start time boundary. Preferred: '2024-01-01T00:00:00' (uses timeZone parameter or calendar timezone). Also accepts: '2024-01-01T00:00:00Z' or '2024-01-01T00:00:00-08:00'."),
-    timeMax: z.string()
-      .refine((val) => {
-        const withTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/.test(val);
-        const withoutTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(val);
-        return withTimezone || withoutTimezone;
-      }, "Must be ISO 8601 format: '2026-01-01T00:00:00'")
-      .describe("End time boundary. Preferred: '2024-01-01T23:59:59' (uses timeZone parameter or calendar timezone). Also accepts: '2024-01-01T23:59:59Z' or '2024-01-01T23:59:59-08:00'."),
-    timeZone: z.string().optional().describe(
-      "Timezone as IANA Time Zone Database name (e.g., America/Los_Angeles). Takes priority over calendar's default timezone. Only used for timezone-naive datetime strings."
-    ),
-    fields: z.array(z.enum(ALLOWED_EVENT_FIELDS)).optional().describe(
-      "Optional array of additional event fields to retrieve. Available fields are strictly validated. Default fields (id, summary, start, end, status, htmlLink, location, attendees) are always included."
-    ),
-    privateExtendedProperty: z
-      .array(z.string().regex(/^[^=]+=[^=]+$/, "Must be in key=value format"))
-      .optional()
-      .describe(
-        "Filter by private extended properties (key=value). Matches events that have all specified properties."
-      ),
-    sharedExtendedProperty: z
-      .array(z.string().regex(/^[^=]+=[^=]+$/, "Must be in key=value format"))
-      .optional()
-      .describe(
-        "Filter by shared extended properties (key=value). Matches events that have all specified properties."
-      )
+    }).describe("Calendar ID(s) to search"),
+    query: z.string().describe("Search text (matches summary, description, location, attendees)"),
+    timeMin: z.string().refine((val) => ISO8601_DATETIME.test(val)).describe("Start boundary"),
+    timeMax: z.string().refine((val) => ISO8601_DATETIME.test(val)).describe("End boundary"),
+    timeZone: timeZoneSchema,
+    fields: fieldsSchema
   }),
-  
+
   'get-event': z.object({
     account: singleAccountSchema,
-    calendarId: z.string().describe("ID of the calendar (use 'primary' for the main calendar)"),
-    eventId: z.string().describe("ID of the event to retrieve"),
-    fields: z.array(z.enum(ALLOWED_EVENT_FIELDS)).optional().describe(
-      "Optional array of additional event fields to retrieve. Available fields are strictly validated. Default fields (id, summary, start, end, status, htmlLink, location, attendees) are always included."
-    )
+    calendarId: z.string().describe("Calendar ID ('primary' for main)"),
+    eventId: z.string().describe("Event ID"),
+    fields: fieldsSchema
   }),
 
   'list-colors': z.object({
     account: singleAccountSchema,
   }),
 
+  // SIMPLIFIED create-event - removed rarely used fields
   'create-event': z.object({
     account: singleAccountSchema,
-    calendarId: z.string().describe("ID of the calendar (use 'primary' for the main calendar)"),
-    eventId: z.string().optional().describe("Optional custom event ID (5-1024 characters, base32hex encoding: lowercase letters a-v and digits 0-9 only). If not provided, Google Calendar will generate one."),
-    summary: z.string().describe("Title of the event"),
-    description: z.string().optional().describe("Description/notes for the event"),
+    calendarId: z.string().describe("Calendar ID ('primary' for main)"),
+    summary: z.string().describe("Event title"),
+    description: z.string().optional().describe("Event description"),
     start: z.string()
-      .refine((val) => {
-        const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(val);
-        const withTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/.test(val);
-        const withoutTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(val);
-        return dateOnly || withTimezone || withoutTimezone;
-      }, "Must be ISO 8601 format: '2025-01-01T10:00:00' for timed events or '2025-01-01' for all-day events")
-      .describe("Event start time: '2025-01-01T10:00:00' for timed events or '2025-01-01' for all-day events. Also accepts Google Calendar API object format: {date: '2025-01-01'} or {dateTime: '2025-01-01T10:00:00', timeZone: 'America/Los_Angeles'}"),
+      .refine((val) => ISO8601_DATE_OR_DATETIME.test(val), "ISO 8601 format")
+      .describe("Start: '2025-01-01T10:00:00' or '2025-01-01' for all-day"),
     end: z.string()
-      .refine((val) => {
-        const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(val);
-        const withTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/.test(val);
-        const withoutTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(val);
-        return dateOnly || withTimezone || withoutTimezone;
-      }, "Must be ISO 8601 format: '2025-01-01T11:00:00' for timed events or '2025-01-02' for all-day events")
-      .describe("Event end time: '2025-01-01T11:00:00' for timed events or '2025-01-02' for all-day events (exclusive). Also accepts Google Calendar API object format: {date: '2025-01-02'} or {dateTime: '2025-01-01T11:00:00', timeZone: 'America/Los_Angeles'}"),
-    timeZone: z.string().optional().describe(
-      "Timezone as IANA Time Zone Database name (e.g., America/Los_Angeles). Takes priority over calendar's default timezone. Only used for timezone-naive datetime strings."
-    ),
-    location: z.string().optional().describe("Location of the event"),
+      .refine((val) => ISO8601_DATE_OR_DATETIME.test(val), "ISO 8601 format")
+      .describe("End: '2025-01-01T11:00:00' or '2025-01-02' for all-day"),
+    timeZone: timeZoneSchema,
+    location: z.string().optional().describe("Event location"),
     attendees: z.array(z.object({
-      email: z.string().email().describe("Email address of the attendee"),
-      displayName: z.string().optional().describe("Display name of the attendee"),
-      optional: z.boolean().optional().describe("Whether this is an optional attendee"),
-      responseStatus: z.enum(["needsAction", "declined", "tentative", "accepted"]).optional().describe("Attendee's response status"),
-      comment: z.string().optional().describe("Attendee's response comment"),
-      additionalGuests: z.number().int().min(0).optional().describe("Number of additional guests the attendee is bringing")
-    })).optional().describe("List of event attendees with their details"),
-    colorId: z.string().optional().describe(
-      "Color ID for the event (use list-colors to see available IDs)"
-    ),
-    reminders: z.object({
-      useDefault: z.boolean().describe("Whether to use the default reminders"),
-      overrides: z.array(z.object({
-        method: z.enum(["email", "popup"]).default("popup").describe("Reminder method"),
-        minutes: z.number().describe("Minutes before the event to trigger the reminder")
-      }).partial({ method: true })).optional().describe("Custom reminders")
-    }).describe("Reminder settings for the event").optional(),
+      email: z.string().email().describe("Attendee email")
+    })).optional().describe("Attendees list"),
     recurrence: recurrenceSchema,
-    transparency: z.enum(["opaque", "transparent"]).optional().describe(
-      "Whether the event blocks time on the calendar. 'opaque' means busy, 'transparent' means free."
-    ),
-    visibility: z.enum(["default", "public", "private", "confidential"]).optional().describe(
-      "Visibility of the event. Use 'public' for public events, 'private' for private events visible to attendees."
-    ),
-    guestsCanInviteOthers: z.boolean().optional().describe(
-      "Whether attendees can invite others to the event. Default is true."
-    ),
-    guestsCanModify: z.boolean().optional().describe(
-      "Whether attendees can modify the event. Default is false."
-    ),
-    guestsCanSeeOtherGuests: z.boolean().optional().describe(
-      "Whether attendees can see the list of other attendees. Default is true."
-    ),
-    anyoneCanAddSelf: z.boolean().optional().describe(
-      "Whether anyone can add themselves to the event. Default is false."
-    ),
-    sendUpdates: z.enum(["all", "externalOnly", "none"]).optional().describe(
-      "Whether to send notifications about the event creation. 'all' sends to all guests, 'externalOnly' to non-Google Calendar users only, 'none' sends no notifications."
-    ),
-    conferenceData: z.object({
-      createRequest: z.object({
-        requestId: z.string().describe("Client-generated unique ID for this request to ensure idempotency"),
-        conferenceSolutionKey: z.object({
-          type: z.enum(["hangoutsMeet", "eventHangout", "eventNamedHangout", "addOn"]).describe("Conference solution type")
-        }).describe("Conference solution to create")
-      }).describe("Request to generate a new conference")
-    }).optional().describe(
-      "Conference properties for the event. Use createRequest to add a new conference."
-    ),
-    extendedProperties: z.object({
-      private: z.record(z.string()).optional().describe(
-        "Properties private to the application. Keys can have max 44 chars, values max 1024 chars."
-      ),
-      shared: z.record(z.string()).optional().describe(
-        "Properties visible to all attendees. Keys can have max 44 chars, values max 1024 chars."
-      )
-    }).optional().describe(
-      "Extended properties for storing application-specific data. Max 300 properties totaling 32KB."
-    ),
-    attachments: z.array(z.object({
-      fileUrl: z.string().describe("URL of the attached file"),
-      title: z.string().optional().describe("Title of the attachment"),
-      mimeType: z.string().optional().describe("MIME type of the attachment"),
-      iconLink: z.string().optional().describe("URL of the icon for the attachment"),
-      fileId: z.string().optional().describe("ID of the attached file in Google Drive")
-    })).optional().describe(
-      "File attachments for the event. Requires calendar to support attachments."
-    ),
-    source: z.object({
-      url: z.string().describe("URL of the source"),
-      title: z.string().describe("Title of the source")
-    }).optional().describe(
-      "Source of the event, such as a web page or email message."
-    ),
-    calendarsToCheck: calendarsToCheckSchema,
-    duplicateSimilarityThreshold: z.number().min(0).max(1).optional().describe(
-      "Threshold for duplicate detection (0-1, default: 0.7). Events with similarity above this are flagged as potential duplicates"
-    ),
-    allowDuplicates: z.boolean().optional().describe(
-      "If true, allows creation even when exact duplicates are detected (similarity >= 0.95). Default is false which blocks duplicate creation"
-    ),
-    eventType: z.enum(["default", "focusTime"]).optional().describe(
-      "Type of the event. 'default' for regular events, 'focusTime' for Focus Time blocks."
-    ),
+    eventType: z.enum(["default", "focusTime"]).optional().describe("'focusTime' for Focus Time blocks"),
     focusTimeProperties: z.object({
-      autoDeclineMode: z.enum([
-        "declineNone",
-        "declineAllConflictingInvitations",
-        "declineOnlyNewConflictingInvitations"
-      ]).optional().describe("Whether to auto-decline conflicting meetings"),
-      chatStatus: z.enum(["available", "doNotDisturb"]).optional()
-        .describe("Chat status during focus time"),
+      autoDeclineMode: z.enum(["declineNone", "declineAllConflictingInvitations", "declineOnlyNewConflictingInvitations"]).optional(),
+      chatStatus: z.enum(["available", "doNotDisturb"]).optional(),
       declineMessage: z.string().optional()
-        .describe("Message sent when declining invitations")
-    }).optional().describe(
-      "Focus Time properties. Only used when eventType is 'focusTime'. Requires Google Workspace."
-    )
+    }).optional().describe("Focus Time settings (requires Google Workspace)")
   }).refine(
     (data) => {
-      // Validate that focusTime events use dateTime (not all-day date format)
       if (data.eventType === 'focusTime') {
         const dateOnlyRegex = /^\d{4}-\d{2}-\d{2}$/;
-        if (dateOnlyRegex.test(data.start) || dateOnlyRegex.test(data.end)) {
-          return false;
-        }
+        return !dateOnlyRegex.test(data.start) && !dateOnlyRegex.test(data.end);
       }
       return true;
     },
-    {
-      message: "Focus Time events cannot be all-day events. Use dateTime format (e.g., '2025-01-01T10:00:00') instead of date format.",
-      path: ["eventType"]
-    }
+    { message: "Focus Time events cannot be all-day", path: ["eventType"] }
   ),
 
+  // SIMPLIFIED update-event - removed rarely used fields
   'update-event': z.object({
     account: singleAccountSchema,
-    calendarId: z.string().describe("ID of the calendar (use 'primary' for the main calendar)"),
-    eventId: z.string().describe("ID of the event to update"),
-    summary: z.string().optional().describe("Updated title of the event"),
-    description: z.string().optional().describe("Updated description/notes"),
+    calendarId: z.string().describe("Calendar ID"),
+    eventId: z.string().describe("Event ID to update"),
+    summary: z.string().optional().describe("Updated title"),
+    description: z.string().optional().describe("Updated description"),
     start: z.string()
-      .refine((val) => {
-        const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(val);
-        const withTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/.test(val);
-        const withoutTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(val);
-        return dateOnly || withTimezone || withoutTimezone;
-      }, "Must be ISO 8601 format: '2025-01-01T10:00:00' for timed events or '2025-01-01' for all-day events")
-      .describe("Updated start time: '2025-01-01T10:00:00' for timed events or '2025-01-01' for all-day events. Also accepts Google Calendar API object format: {date: '2025-01-01'} or {dateTime: '2025-01-01T10:00:00', timeZone: 'America/Los_Angeles'}")
-      .optional(),
+      .refine((val) => ISO8601_DATE_OR_DATETIME.test(val), "ISO 8601 format")
+      .optional()
+      .describe("Updated start time"),
     end: z.string()
-      .refine((val) => {
-        const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(val);
-        const withTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/.test(val);
-        const withoutTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(val);
-        return dateOnly || withTimezone || withoutTimezone;
-      }, "Must be ISO 8601 format: '2025-01-01T11:00:00' for timed events or '2025-01-02' for all-day events")
-      .describe("Updated end time: '2025-01-01T11:00:00' for timed events or '2025-01-02' for all-day events (exclusive). Also accepts Google Calendar API object format: {date: '2025-01-02'} or {dateTime: '2025-01-01T11:00:00', timeZone: 'America/Los_Angeles'}")
-      .optional(),
-    timeZone: z.string().optional().describe("Updated timezone as IANA Time Zone Database name. If not provided, uses the calendar's default timezone."),
+      .refine((val) => ISO8601_DATE_OR_DATETIME.test(val), "ISO 8601 format")
+      .optional()
+      .describe("Updated end time"),
+    timeZone: timeZoneSchema,
     location: z.string().optional().describe("Updated location"),
     attendees: z.array(z.object({
-      email: z.string().email().describe("Email address of the attendee")
-    })).optional().describe("Updated attendee list"),
-    colorId: z.string().optional().describe("Updated color ID"),
-    reminders: z.object({
-      useDefault: z.boolean().describe("Whether to use the default reminders"),
-      overrides: z.array(z.object({
-        method: z.enum(["email", "popup"]).default("popup").describe("Reminder method"),
-        minutes: z.number().describe("Minutes before the event to trigger the reminder")
-      }).partial({ method: true })).optional().describe("Custom reminders")
-    }).describe("Reminder settings for the event").optional(),
+      email: z.string().email()
+    })).optional().describe("Updated attendees"),
     recurrence: recurrenceSchema,
-    sendUpdates: z.enum(["all", "externalOnly", "none"]).default("all").describe(
-      "Whether to send update notifications"
-    ),
-    modificationScope: z.enum(["thisAndFollowing", "all", "thisEventOnly"]).optional().describe(
-      "Scope for recurring event modifications"
-    ),
+    sendUpdates: z.enum(["all", "externalOnly", "none"]).default("all").describe("Send notifications"),
+    modificationScope: z.enum(["thisAndFollowing", "all", "thisEventOnly"]).optional().describe("Recurring event scope"),
     originalStartTime: z.string()
-      .refine((val) => {
-        const withTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/.test(val);
-        const withoutTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(val);
-        return withTimezone || withoutTimezone;
-      }, "Must be ISO 8601 format: '2026-01-01T00:00:00'")
-      .describe("Original start time in the ISO 8601 format '2024-01-01T10:00:00'")
-      .optional(),
+      .refine((val) => ISO8601_DATETIME.test(val))
+      .optional()
+      .describe("Original start (required for 'thisEventOnly')"),
     futureStartDate: z.string()
-      .refine((val) => {
-        const withTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/.test(val);
-        const withoutTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(val);
-        return withTimezone || withoutTimezone;
-      }, "Must be ISO 8601 format: '2026-01-01T00:00:00'")
-      .describe("Start date for future instances in the ISO 8601 format '2024-01-01T10:00:00'")
-      .optional(),
-    checkConflicts: z.boolean().optional().describe(
-      "Whether to check for conflicts when updating (default: true when changing time)"
-    ),
-    calendarsToCheck: calendarsToCheckSchema,
-    conferenceData: z.object({
-      createRequest: z.object({
-        requestId: z.string().describe("Client-generated unique ID for this request to ensure idempotency"),
-        conferenceSolutionKey: z.object({
-          type: z.enum(["hangoutsMeet", "eventHangout", "eventNamedHangout", "addOn"]).describe("Conference solution type")
-        }).describe("Conference solution to create")
-      }).describe("Request to generate a new conference for this event")
-    }).optional().describe("Conference properties for the event. Used to add or update Google Meet links."),
-    transparency: z.enum(["opaque", "transparent"]).optional().describe(
-      "Whether the event blocks time on the calendar. 'opaque' means busy, 'transparent' means available"
-    ),
-    visibility: z.enum(["default", "public", "private", "confidential"]).optional().describe(
-      "Visibility of the event"
-    ),
-    guestsCanInviteOthers: z.boolean().optional().describe(
-      "Whether attendees other than the organizer can invite others"
-    ),
-    guestsCanModify: z.boolean().optional().describe(
-      "Whether attendees other than the organizer can modify the event"
-    ),
-    guestsCanSeeOtherGuests: z.boolean().optional().describe(
-      "Whether attendees other than the organizer can see who the event's attendees are"
-    ),
-    anyoneCanAddSelf: z.boolean().optional().describe(
-      "Whether anyone can add themselves to the event"
-    ),
-    extendedProperties: z.object({
-      private: z.record(z.string()).optional().describe("Properties that are private to the creator's app"),
-      shared: z.record(z.string()).optional().describe("Properties that are shared between all apps")
-    }).partial().optional().describe("Extended properties for the event"),
-    attachments: z.array(z.object({
-      fileUrl: z.string().url().describe("URL link to the attachment"),
-      title: z.string().describe("Title of the attachment"),
-      mimeType: z.string().optional().describe("MIME type of the attachment"),
-      iconLink: z.string().optional().describe("URL link to the attachment's icon"),
-      fileId: z.string().optional().describe("ID of the attached Google Drive file")
-    })).optional().describe("File attachments for the event")
-    // Note: eventType is intentionally not included - Google Calendar API does not allow changing event type after creation
+      .refine((val) => ISO8601_DATETIME.test(val))
+      .optional()
+      .describe("Future start (required for 'thisAndFollowing')")
   }).refine(
-    (data) => {
-      // Require originalStartTime when modificationScope is 'thisEventOnly'
-      if (data.modificationScope === 'thisEventOnly' && !data.originalStartTime) {
-        return false;
-      }
-      return true;
-    },
-    {
-      message: "originalStartTime is required when modificationScope is 'thisEventOnly'",
-      path: ["originalStartTime"]
-    }
+    (data) => !(data.modificationScope === 'thisEventOnly' && !data.originalStartTime),
+    { message: "originalStartTime is required when modificationScope is 'thisEventOnly'", path: ["originalStartTime"] }
+  ).refine(
+    (data) => !(data.modificationScope === 'thisAndFollowing' && !data.futureStartDate),
+    { message: "futureStartDate is required when modificationScope is 'thisAndFollowing'", path: ["futureStartDate"] }
   ).refine(
     (data) => {
-      // Require futureStartDate when modificationScope is 'thisAndFollowing'
-      if (data.modificationScope === 'thisAndFollowing' && !data.futureStartDate) {
-        return false;
-      }
-      return true;
-    },
-    {
-      message: "futureStartDate is required when modificationScope is 'thisAndFollowing'",
-      path: ["futureStartDate"]
-    }
-  ).refine(
-    (data) => {
-      // Ensure futureStartDate is in the future when provided
       if (data.futureStartDate) {
-        const futureDate = new Date(data.futureStartDate);
-        const now = new Date();
-        return futureDate > now;
+        return new Date(data.futureStartDate) > new Date();
       }
       return true;
     },
-    {
-      message: "futureStartDate must be in the future",
-      path: ["futureStartDate"]
-    }
+    { message: "futureStartDate must be in the future", path: ["futureStartDate"] }
   ),
-  
+
   'delete-event': z.object({
     account: singleAccountSchema,
-    calendarId: z.string().describe("ID of the calendar (use 'primary' for the main calendar)"),
-    eventId: z.string().describe("ID of the event to delete"),
-    sendUpdates: z.enum(["all", "externalOnly", "none"]).default("all").describe(
-      "Whether to send cancellation notifications"
-    )
+    calendarId: z.string().describe("Calendar ID"),
+    eventId: z.string().describe("Event ID to delete"),
+    sendUpdates: z.enum(["all", "externalOnly", "none"]).default("all").describe("Send cancellation notices")
   }),
 
   'get-freebusy': z.object({
-    account: multiAccountSchema.describe(
-      "Account nickname(s) to query from (e.g., 'work' or ['work', 'personal']). Optional - if omitted, queries from all connected accounts to maximize calendar accessibility."
-    ),
+    account: multiAccountSchema,
     calendars: z.array(z.object({
-      id: z.string().describe("ID of the calendar (use 'primary' for the main calendar)")
-    })).describe(
-      "List of calendars and/or groups to query for free/busy information"
-    ),
-    timeMin: z.string()
-      .refine((val) => {
-        const withTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/.test(val);
-        const withoutTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(val);
-        return withTimezone || withoutTimezone;
-      }, "Must be ISO 8601 format: '2026-01-01T00:00:00'")
-      .describe("Start time boundary. Preferred: '2024-01-01T00:00:00' (uses timeZone parameter or calendar timezone). Also accepts: '2024-01-01T00:00:00Z' or '2024-01-01T00:00:00-08:00'."),
-    timeMax: z.string()
-      .refine((val) => {
-        const withTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/.test(val);
-        const withoutTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(val);
-        return withTimezone || withoutTimezone;
-      }, "Must be ISO 8601 format: '2026-01-01T00:00:00'")
-      .describe("End time boundary. Preferred: '2024-01-01T23:59:59' (uses timeZone parameter or calendar timezone). Also accepts: '2024-01-01T23:59:59Z' or '2024-01-01T23:59:59-08:00'."),
-    timeZone: z.string().optional().describe("Timezone for the query"),
-    groupExpansionMax: z.number().int().max(100).optional().describe(
-      "Maximum number of calendars to expand per group (max 100)"
-    ),
-    calendarExpansionMax: z.number().int().max(50).optional().describe(
-      "Maximum number of calendars to expand (max 50)"
-    )
+      id: z.string().describe("Calendar ID")
+    })).describe("Calendars to check"),
+    timeMin: z.string().refine((val) => ISO8601_DATETIME.test(val)).describe("Start boundary"),
+    timeMax: z.string().refine((val) => ISO8601_DATETIME.test(val)).describe("End boundary"),
+    timeZone: timeZoneSchema
   }),
-  
+
   'get-current-time': z.object({
     account: singleAccountSchema,
-    timeZone: z.string().optional().describe(
-      "Optional IANA timezone (e.g., 'America/Los_Angeles', 'Europe/London', 'UTC'). If not provided, uses the primary Google Calendar's default timezone."
-    )
+    timeZone: z.string().optional().describe("IANA timezone (defaults to calendar timezone)")
   }),
 
   'respond-to-event': z.object({
-    calendarId: z.string().describe("ID of the calendar (use 'primary' for the main calendar)"),
-    eventId: z.string().describe("ID of the event to respond to"),
-    account: z.string().optional().describe(
-      "Account nickname to use for this operation (e.g., 'work', 'personal'). Optional when only one account is connected - will auto-select the account with appropriate permissions. Use 'list-calendars' to see available accounts."
-    ),
-    response: z.enum(["accepted", "declined", "tentative", "needsAction"]).describe(
-      "Your response to the event invitation: 'accepted' (accept), 'declined' (decline), 'tentative' (maybe), 'needsAction' (no response)"
-    ),
-    comment: z.string().optional().describe(
-      "Optional message/note to include with your response (e.g., 'I have a conflict' when declining)"
-    ),
-    modificationScope: z.enum(["thisEventOnly", "all"]).optional().describe(
-      "For recurring events: 'thisEventOnly' responds to just this instance, 'all' responds to all instances. Default is 'all'."
-    ),
+    calendarId: z.string().describe("Calendar ID"),
+    eventId: z.string().describe("Event ID"),
+    account: singleAccountSchema,
+    response: z.enum(["accepted", "declined", "tentative", "needsAction"]).describe("Your response"),
+    comment: z.string().optional().describe("Optional response message"),
+    modificationScope: z.enum(["thisEventOnly", "all"]).optional().describe("For recurring events"),
     originalStartTime: z.string()
-      .refine((val) => {
-        const withTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/.test(val);
-        const withoutTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(val);
-        return withTimezone || withoutTimezone;
-      }, "Must be ISO 8601 format: '2025-01-01T10:00:00'")
-      .describe("Original start time of the specific instance (required when modificationScope is 'thisEventOnly')")
-      .optional(),
-    sendUpdates: z.enum(["all", "externalOnly", "none"]).optional().describe(
-      "Whether to send response notifications. 'all' sends to all guests, 'externalOnly' to non-Google Calendar users only, 'none' sends no notifications. Default is 'none'."
-    )
+      .refine((val) => ISO8601_DATETIME.test(val))
+      .optional()
+      .describe("Required for 'thisEventOnly'"),
+    sendUpdates: z.enum(["all", "externalOnly", "none"]).optional().describe("Send notifications")
   }).refine(
-    (data) => {
-      // Require originalStartTime when modificationScope is 'thisEventOnly'
-      if (data.modificationScope === 'thisEventOnly' && !data.originalStartTime) {
-        return false;
-      }
-      return true;
-    },
-    {
-      message: "originalStartTime is required when modificationScope is 'thisEventOnly'",
-      path: ["originalStartTime"]
-    }
+    (data) => !(data.modificationScope === 'thisEventOnly' && !data.originalStartTime),
+    { message: "originalStartTime required for 'thisEventOnly'", path: ["originalStartTime"] }
   ),
 
   'set-out-of-office': z.object({
     account: singleAccountSchema,
-    calendarId: z.string().describe("Calendar ID (use 'primary' for the main calendar). Out of Office events only work on primary calendar."),
-    summary: z.string().optional().default("Out of office")
-      .describe("Title for the out of office event"),
-    start: z.string()
-      .refine((val) => {
-        const withTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/.test(val);
-        const withoutTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(val);
-        return withTimezone || withoutTimezone;
-      }, "Must be ISO 8601 dateTime format (not all-day): '2025-01-01T09:00:00'")
-      .describe("Start time (must be dateTime format, not all-day)"),
-    end: z.string()
-      .refine((val) => {
-        const withTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/.test(val);
-        const withoutTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(val);
-        return withTimezone || withoutTimezone;
-      }, "Must be ISO 8601 dateTime format (not all-day): '2025-01-01T17:00:00'")
-      .describe("End time (must be dateTime format, not all-day)"),
+    calendarId: z.string().describe("Calendar ID ('primary' for main)"),
+    summary: z.string().optional().default("Out of office").describe("Event title"),
+    start: z.string().refine((val) => ISO8601_DATETIME.test(val)).describe("Start time"),
+    end: z.string().refine((val) => ISO8601_DATETIME.test(val)).describe("End time"),
     timeZone: timeZoneSchema,
-    autoDeclineMode: z.enum([
-      "declineNone",
-      "declineAllConflictingInvitations",
-      "declineOnlyNewConflictingInvitations"
-    ]).optional().default("declineAllConflictingInvitations")
-      .describe("How to handle conflicting meetings. Default is to decline all conflicts."),
-    declineMessage: z.string().optional()
-      .describe("Message sent when declining invitations (e.g., 'I'm out of office, will respond when I return')")
+    autoDeclineMode: z.enum(["declineNone", "declineAllConflictingInvitations", "declineOnlyNewConflictingInvitations"])
+      .optional().default("declineAllConflictingInvitations").describe("How to handle conflicts"),
+    declineMessage: z.string().optional().describe("Message for declined invitations")
   }),
 
   'set-working-location': z.object({
     account: singleAccountSchema,
-    calendarId: z.string().describe("Calendar ID (use 'primary' for the main calendar). Working Location events only work on primary calendar."),
-    summary: z.string().optional()
-      .describe("Optional title (auto-generated based on location type if not provided)"),
-    start: z.string()
-      .refine((val) => {
-        const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(val);
-        const withTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/.test(val);
-        const withoutTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(val);
-        return dateOnly || withTimezone || withoutTimezone;
-      }, "Must be ISO 8601 format: '2025-01-01T10:00:00' for timed events or '2025-01-01' for all-day events")
-      .describe("Start (dateTime or date for all-day)"),
-    end: z.string()
-      .refine((val) => {
-        const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(val);
-        const withTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/.test(val);
-        const withoutTimezone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(val);
-        return dateOnly || withTimezone || withoutTimezone;
-      }, "Must be ISO 8601 format: '2025-01-01T17:00:00' for timed events or '2025-01-02' for all-day events")
-      .describe("End (dateTime or date for all-day)"),
+    calendarId: z.string().describe("Calendar ID ('primary' for main)"),
+    summary: z.string().optional().describe("Event title (auto-generated if omitted)"),
+    start: z.string().refine((val) => ISO8601_DATE_OR_DATETIME.test(val)).describe("Start"),
+    end: z.string().refine((val) => ISO8601_DATE_OR_DATETIME.test(val)).describe("End"),
     timeZone: timeZoneSchema,
-    locationType: z.enum(["homeOffice", "officeLocation", "customLocation"])
-      .describe("Type of working location"),
-    // For officeLocation
-    officeLabel: z.string().optional()
-      .describe("Office name shown in Calendar (e.g., 'HQ Building', 'NYC Office')"),
-    buildingId: z.string().optional()
-      .describe("Building identifier from organization's Resources (Google Workspace)"),
-    floorId: z.string().optional()
-      .describe("Floor identifier"),
-    floorSectionId: z.string().optional()
-      .describe("Floor section identifier"),
-    deskId: z.string().optional()
-      .describe("Desk identifier"),
-    // For customLocation
-    customLocationLabel: z.string().optional()
-      .describe("Label for custom location (e.g., 'Coffee Shop', 'Client Site')")
+    locationType: z.enum(["homeOffice", "officeLocation", "customLocation"]).describe("Location type"),
+    officeLabel: z.string().optional().describe("Office name (for officeLocation)"),
+    customLocationLabel: z.string().optional().describe("Custom location name")
   })
 } as const;
 
@@ -726,94 +317,59 @@ interface ToolDefinition {
   schema: z.ZodType<any>;
   handler: new () => BaseToolHandler;
   handlerFunction?: (args: any) => Promise<any>;
-  customInputSchema?: any; // Custom schema shape for MCP registration (overrides extractSchemaShape)
+  customInputSchema?: any;
 }
 
 
 export class ToolRegistry {
   private static extractSchemaShape(schema: z.ZodType<any>): any {
     const schemaAny = schema as any;
-    
-    // Handle ZodEffects (schemas with .refine())
+
     if (schemaAny._def && schemaAny._def.typeName === 'ZodEffects') {
       return this.extractSchemaShape(schemaAny._def.schema);
     }
-    
-    // Handle regular ZodObject
-    if ('shape' in schemaAny) {
-      return schemaAny.shape;
-    }
-    
-    // Handle other nested structures
+
+    if ('shape' in schemaAny) return schemaAny.shape;
     if (schemaAny._def && schemaAny._def.schema) {
       return this.extractSchemaShape(schemaAny._def.schema);
     }
-    
-    // Fallback to the original approach
+
     return schemaAny._def?.schema?.shape || schemaAny.shape;
   }
 
+  // Simplified tool definitions with shorter descriptions
   private static tools: ToolDefinition[] = [
     {
       name: "list-calendars",
-      description: "List all available calendars",
+      description: "List available calendars",
       schema: ToolSchemas['list-calendars'],
       handler: ListCalendarsHandler
     },
     {
       name: "list-events",
-      description: "List events from one or more calendars. Supports both calendar IDs and calendar names.",
+      description: "List events from calendar(s)",
       schema: ToolSchemas['list-events'],
       handler: ListEventsHandler,
       handlerFunction: async (args: ListEventsInput & { calendarId: string | string[] }) => {
         let processedCalendarId: string | string[] = args.calendarId;
 
-        // If it's already an array (native array format), keep as-is (already validated by schema)
         if (Array.isArray(args.calendarId)) {
           processedCalendarId = args.calendarId;
-        }
-        // Handle JSON string format (double or single-quoted)
-        else if (typeof args.calendarId === 'string' && args.calendarId.trim().startsWith('[') && args.calendarId.trim().endsWith(']')) {
+        } else if (typeof args.calendarId === 'string' && args.calendarId.trim().startsWith('[')) {
           try {
             let jsonString = args.calendarId.trim();
-
-            // Normalize single-quoted JSON-like strings to valid JSON (Python/shell style)
-            // Only replace single quotes that are string delimiters (after '[', ',', or before ']', ',')
-            // This avoids breaking calendar IDs with apostrophes like "John's Calendar"
             if (jsonString.includes("'")) {
               jsonString = jsonString
-                .replace(/\[\s*'/g, '["')           // [' -> ["
-                .replace(/'\s*,\s*'/g, '", "')      // ', ' -> ", "
-                .replace(/'\s*\]/g, '"]');          // '] -> "]
+                .replace(/\[\s*'/g, '["')
+                .replace(/'\s*,\s*'/g, '", "')
+                .replace(/'\s*\]/g, '"]');
             }
-
             const parsed = JSON.parse(jsonString);
-
-            // Validate parsed result
-            if (!Array.isArray(parsed)) {
-              throw new Error('JSON string must contain an array');
+            if (Array.isArray(parsed) && parsed.every(id => typeof id === 'string' && id.length > 0)) {
+              processedCalendarId = parsed;
             }
-            if (!parsed.every(id => typeof id === 'string' && id.length > 0)) {
-              throw new Error('Array must contain only non-empty strings');
-            }
-            if (parsed.length === 0) {
-              throw new Error("At least one calendar ID is required");
-            }
-            if (parsed.length > 50) {
-              throw new Error("Maximum 50 calendars allowed");
-            }
-            if (new Set(parsed).size !== parsed.length) {
-              throw new Error("Duplicate calendar IDs are not allowed");
-            }
-
-            processedCalendarId = parsed;
-          } catch (error) {
-            throw new Error(
-              `Invalid JSON format for calendarId: ${error instanceof Error ? error.message : 'Unknown parsing error'}`
-            );
-          }
+          } catch { /* use original */ }
         }
-        // Otherwise it's a single string calendar ID - keep as-is
 
         return {
           account: args.account,
@@ -821,75 +377,73 @@ export class ToolRegistry {
           timeMin: args.timeMin,
           timeMax: args.timeMax,
           timeZone: args.timeZone,
-          fields: args.fields,
-          privateExtendedProperty: args.privateExtendedProperty,
-          sharedExtendedProperty: args.sharedExtendedProperty
+          fields: args.fields
         };
       }
     },
     {
       name: "search-events",
-      description: "Search for events in a calendar by text query.",
+      description: "Search events by text",
       schema: ToolSchemas['search-events'],
       handler: SearchEventsHandler
     },
     {
       name: "get-event",
-      description: "Get details of a specific event by ID.",
+      description: "Get event details by ID",
       schema: ToolSchemas['get-event'],
       handler: GetEventHandler
     },
     {
       name: "list-colors",
-      description: "List available color IDs and their meanings for calendar events",
+      description: "List available event colors",
       schema: ToolSchemas['list-colors'],
       handler: ListColorsHandler
     },
     {
       name: "create-event",
-      description: "Create a new calendar event.",
+      description: "Create calendar event. Supports regular events and Focus Time blocks.",
       schema: ToolSchemas['create-event'],
       handler: CreateEventHandler
     },
     {
       name: "update-event",
-      description: "Update an existing calendar event with recurring event modification scope support.",
+      description: "Update calendar event with recurring event support",
       schema: ToolSchemas['update-event'],
       handler: UpdateEventHandler
     },
     {
       name: "delete-event",
-      description: "Delete a calendar event.",
+      description: "Delete calendar event",
       schema: ToolSchemas['delete-event'],
       handler: DeleteEventHandler
     },
     {
       name: "get-freebusy",
-      description: "Query free/busy information for calendars. Note: Time range is limited to a maximum of 3 months between timeMin and timeMax.",
+      description: "Query free/busy for calendars (max 3 month range)",
       schema: ToolSchemas['get-freebusy'],
       handler: FreeBusyEventHandler
     },
     {
       name: "get-current-time",
-      description: "Get the current date and time. Call this FIRST before creating, updating, or searching for events to ensure you have accurate date context for scheduling.",
+      description: "Get current date/time. Call FIRST before creating/searching events.",
       schema: ToolSchemas['get-current-time'],
       handler: GetCurrentTimeHandler
     },
     {
       name: "respond-to-event",
-      description: "Respond to a calendar event invitation with Accept, Decline, Maybe (Tentative), or No Response.",
+      description: "Respond to event invitation (accept/decline/tentative)",
       schema: ToolSchemas['respond-to-event'],
       handler: RespondToEventHandler
     },
     {
       name: "set-out-of-office",
-      description: "Set an Out of Office event on your calendar with auto-decline settings for conflicting meetings. Requires Google Workspace.",
+      description: "Set Out of Office with auto-decline (requires Google Workspace)",
       schema: ToolSchemas['set-out-of-office'],
       handler: SetOutOfOfficeHandler
     },
     {
       name: "set-working-location",
-      description: "Set your working location (home, office, or custom location) on your calendar. Requires Google Workspace.",
+      description: "Set working location (requires Google Workspace)",
       schema: ToolSchemas['set-working-location'],
       handler: SetWorkingLocationHandler
     }
@@ -908,17 +462,9 @@ export class ToolRegistry {
     });
   }
 
-  /**
-   * Normalizes datetime fields from object format to string format
-   * Converts { date: "2025-01-01" } or { dateTime: "...", timeZone: "..." } to simple strings
-   * This allows accepting both Google Calendar API format and our simplified format
-   */
   private static normalizeDateTimeFields(toolName: string, args: any): any {
-    // Only normalize for tools that have datetime fields
     const toolsWithDateTime = ['create-event', 'update-event', 'set-out-of-office', 'set-working-location'];
-    if (!toolsWithDateTime.includes(toolName)) {
-      return args;
-    }
+    if (!toolsWithDateTime.includes(toolName)) return args;
 
     const normalized = { ...args };
     const dateTimeFields = ['start', 'end', 'originalStartTime', 'futureStartDate'];
@@ -926,12 +472,8 @@ export class ToolRegistry {
     for (const field of dateTimeFields) {
       if (normalized[field] && typeof normalized[field] === 'object') {
         const obj = normalized[field];
-        // Convert object format to string format
-        if (obj.date) {
-          normalized[field] = obj.date;
-        } else if (obj.dateTime) {
-          normalized[field] = obj.dateTime;
-        }
+        if (obj.date) normalized[field] = obj.date;
+        else if (obj.dateTime) normalized[field] = obj.dateTime;
       }
     }
 
@@ -946,7 +488,6 @@ export class ToolRegistry {
     ) => Promise<{ content: Array<{ type: "text"; text: string }> }>
   ) {
     for (const tool of this.tools) {
-      // Use the existing registerTool method which handles schema conversion properly
       server.registerTool(
         tool.name,
         {
@@ -954,17 +495,9 @@ export class ToolRegistry {
           inputSchema: tool.customInputSchema || this.extractSchemaShape(tool.schema)
         },
         async (args: any) => {
-          // Preprocess: Normalize datetime fields (convert object format to string format)
-          // This allows accepting both formats while keeping schemas simple
           const normalizedArgs = this.normalizeDateTimeFields(tool.name, args);
-
-          // Validate input using our Zod schema
           const validatedArgs = tool.schema.parse(normalizedArgs);
-
-          // Apply any custom handler function preprocessing
           const processedArgs = tool.handlerFunction ? await tool.handlerFunction(validatedArgs) : validatedArgs;
-
-          // Create handler instance and execute
           const handler = new tool.handler();
           return executeWithHandler(handler, processedArgs);
         }

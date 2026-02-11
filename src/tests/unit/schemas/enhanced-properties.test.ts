@@ -1,9 +1,21 @@
 import { describe, it, expect } from 'vitest';
 import { ToolSchemas } from '../../../tools/registry.js';
 
-describe('Enhanced Create-Event Properties', () => {
+// Note: This file previously tested enhanced properties that were removed
+// in the simplified schema to reduce token usage. The following features
+// are no longer in the simplified create-event schema:
+// - transparency, visibility
+// - guestsCanInviteOthers, guestsCanModify, guestsCanSeeOtherGuests, anyoneCanAddSelf
+// - sendUpdates
+// - conferenceData
+// - extendedProperties
+// - attachments
+// - source
+// - colorId, reminders
+
+describe('Simplified Create-Event Schema', () => {
   const createEventSchema = ToolSchemas['create-event'];
-  
+
   const baseEvent = {
     calendarId: 'primary',
     summary: 'Test Event',
@@ -11,234 +23,49 @@ describe('Enhanced Create-Event Properties', () => {
     end: '2025-01-20T11:00:00'
   };
 
-  describe('Guest Management Properties', () => {
-    it('should accept transparency values', () => {
-      expect(() => createEventSchema.parse({
-        ...baseEvent,
-        transparency: 'opaque'
-      })).not.toThrow();
-      
-      expect(() => createEventSchema.parse({
-        ...baseEvent,
-        transparency: 'transparent'
-      })).not.toThrow();
+  describe('Core Required Fields', () => {
+    it('should accept minimal event with required fields only', () => {
+      expect(() => createEventSchema.parse(baseEvent)).not.toThrow();
     });
 
-    it('should reject invalid transparency values', () => {
-      expect(() => createEventSchema.parse({
-        ...baseEvent,
-        transparency: 'invalid'
-      })).toThrow();
+    it('should reject event without calendarId', () => {
+      const { calendarId, ...rest } = baseEvent;
+      expect(() => createEventSchema.parse(rest)).toThrow();
     });
 
-    it('should accept visibility values', () => {
-      const validVisibilities = ['default', 'public', 'private', 'confidential'];
-      validVisibilities.forEach(visibility => {
-        expect(() => createEventSchema.parse({
-          ...baseEvent,
-          visibility
-        })).not.toThrow();
-      });
+    it('should reject event without summary', () => {
+      const { summary, ...rest } = baseEvent;
+      expect(() => createEventSchema.parse(rest)).toThrow();
     });
 
-    it('should accept guest permission booleans', () => {
-      const event = {
-        ...baseEvent,
-        guestsCanInviteOthers: false,
-        guestsCanModify: true,
-        guestsCanSeeOtherGuests: false,
-        anyoneCanAddSelf: true
-      };
-      expect(() => createEventSchema.parse(event)).not.toThrow();
+    it('should reject event without start', () => {
+      const { start, ...rest } = baseEvent;
+      expect(() => createEventSchema.parse(rest)).toThrow();
     });
 
-    it('should accept sendUpdates values', () => {
-      const validSendUpdates = ['all', 'externalOnly', 'none'];
-      validSendUpdates.forEach(sendUpdates => {
-        expect(() => createEventSchema.parse({
-          ...baseEvent,
-          sendUpdates
-        })).not.toThrow();
-      });
+    it('should reject event without end', () => {
+      const { end, ...rest } = baseEvent;
+      expect(() => createEventSchema.parse(rest)).toThrow();
     });
   });
 
-  describe('Conference Data', () => {
-    it('should accept valid conference data', () => {
-      const event = {
-        ...baseEvent,
-        conferenceData: {
-          createRequest: {
-            requestId: 'unique-123',
-            conferenceSolutionKey: {
-              type: 'hangoutsMeet'
-            }
-          }
-        }
-      };
-      expect(() => createEventSchema.parse(event)).not.toThrow();
-    });
-
-    it('should accept all conference solution types', () => {
-      const types = ['hangoutsMeet', 'eventHangout', 'eventNamedHangout', 'addOn'];
-      types.forEach(type => {
-        const event = {
-          ...baseEvent,
-          conferenceData: {
-            createRequest: {
-              requestId: `req-${type}`,
-              conferenceSolutionKey: { type }
-            }
-          }
-        };
-        expect(() => createEventSchema.parse(event)).not.toThrow();
-      });
-    });
-
-    it('should reject conference data without required fields', () => {
-      expect(() => createEventSchema.parse({
-        ...baseEvent,
-        conferenceData: {
-          createRequest: {
-            requestId: 'test'
-            // Missing conferenceSolutionKey
-          }
-        }
-      })).toThrow();
-    });
-  });
-
-  describe('Extended Properties', () => {
-    it('should accept extended properties', () => {
-      const event = {
-        ...baseEvent,
-        extendedProperties: {
-          private: {
-            key1: 'value1',
-            key2: 'value2'
-          },
-          shared: {
-            sharedKey: 'sharedValue'
-          }
-        }
-      };
-      expect(() => createEventSchema.parse(event)).not.toThrow();
-    });
-
-    it('should accept only private properties', () => {
-      const event = {
-        ...baseEvent,
-        extendedProperties: {
-          private: { app: 'myapp' }
-        }
-      };
-      expect(() => createEventSchema.parse(event)).not.toThrow();
-    });
-
-    it('should accept only shared properties', () => {
-      const event = {
-        ...baseEvent,
-        extendedProperties: {
-          shared: { category: 'meeting' }
-        }
-      };
-      expect(() => createEventSchema.parse(event)).not.toThrow();
-    });
-
-    it('should accept empty extended properties object', () => {
-      const event = {
-        ...baseEvent,
-        extendedProperties: {}
-      };
-      expect(() => createEventSchema.parse(event)).not.toThrow();
-    });
-  });
-
-  describe('Attachments', () => {
-    it('should accept attachments array', () => {
-      const event = {
-        ...baseEvent,
-        attachments: [
-          {
-            fileUrl: 'https://example.com/file.pdf',
-            title: 'Document',
-            mimeType: 'application/pdf',
-            iconLink: 'https://example.com/icon.png',
-            fileId: 'file123'
-          }
-        ]
-      };
-      expect(() => createEventSchema.parse(event)).not.toThrow();
-    });
-
-    it('should accept minimal attachment (only fileUrl)', () => {
-      const event = {
-        ...baseEvent,
-        attachments: [
-          { fileUrl: 'https://example.com/file.pdf' }
-        ]
-      };
-      expect(() => createEventSchema.parse(event)).not.toThrow();
-    });
-
-    it('should accept multiple attachments', () => {
-      const event = {
-        ...baseEvent,
-        attachments: [
-          { fileUrl: 'https://example.com/file1.pdf' },
-          { fileUrl: 'https://example.com/file2.doc', title: 'Doc' },
-          { fileUrl: 'https://example.com/file3.xls', mimeType: 'application/excel' }
-        ]
-      };
-      expect(() => createEventSchema.parse(event)).not.toThrow();
-    });
-
-    it('should reject attachments without fileUrl', () => {
-      expect(() => createEventSchema.parse({
-        ...baseEvent,
-        attachments: [
-          { title: 'Document' } // Missing fileUrl
-        ]
-      })).toThrow();
-    });
-  });
-
-  describe('Enhanced Attendees', () => {
-    it('should accept attendees with all optional fields', () => {
-      const event = {
-        ...baseEvent,
-        attendees: [
-          {
-            email: 'test@example.com',
-            displayName: 'Test User',
-            optional: true,
-            responseStatus: 'accepted',
-            comment: 'Looking forward to it',
-            additionalGuests: 2
-          }
-        ]
-      };
-      expect(() => createEventSchema.parse(event)).not.toThrow();
-    });
-
-    it('should accept all response status values', () => {
-      const statuses = ['needsAction', 'declined', 'tentative', 'accepted'];
-      statuses.forEach(responseStatus => {
-        const event = {
-          ...baseEvent,
-          attendees: [
-            { email: 'test@example.com', responseStatus }
-          ]
-        };
-        expect(() => createEventSchema.parse(event)).not.toThrow();
-      });
-    });
-
+  describe('Simplified Attendees', () => {
     it('should accept attendees with only email', () => {
       const event = {
         ...baseEvent,
         attendees: [
-          { email: 'minimal@example.com' }
+          { email: 'test@example.com' }
+        ]
+      };
+      expect(() => createEventSchema.parse(event)).not.toThrow();
+    });
+
+    it('should accept multiple attendees', () => {
+      const event = {
+        ...baseEvent,
+        attendees: [
+          { email: 'user1@example.com' },
+          { email: 'user2@example.com' }
         ]
       };
       expect(() => createEventSchema.parse(event)).not.toThrow();
@@ -252,110 +79,66 @@ describe('Enhanced Create-Event Properties', () => {
         ]
       })).toThrow();
     });
+  });
 
-    it('should reject negative additional guests', () => {
+  describe('Optional Fields', () => {
+    it('should accept description', () => {
       expect(() => createEventSchema.parse({
         ...baseEvent,
-        attendees: [
-          { email: 'test@example.com', additionalGuests: -1 }
-        ]
-      })).toThrow();
+        description: 'Event description'
+      })).not.toThrow();
+    });
+
+    it('should accept location', () => {
+      expect(() => createEventSchema.parse({
+        ...baseEvent,
+        location: 'Conference Room A'
+      })).not.toThrow();
+    });
+
+    it('should accept timeZone', () => {
+      expect(() => createEventSchema.parse({
+        ...baseEvent,
+        timeZone: 'America/Los_Angeles'
+      })).not.toThrow();
+    });
+
+    it('should accept recurrence', () => {
+      expect(() => createEventSchema.parse({
+        ...baseEvent,
+        recurrence: ['RRULE:FREQ=WEEKLY;COUNT=5']
+      })).not.toThrow();
     });
   });
 
-  describe('Source Property', () => {
-    it('should accept source with url and title', () => {
-      const event = {
-        ...baseEvent,
-        source: {
-          url: 'https://example.com/event/123',
-          title: 'External Event System'
-        }
-      };
-      expect(() => createEventSchema.parse(event)).not.toThrow();
-    });
-
-    it('should reject source without url', () => {
+  describe('Focus Time Support', () => {
+    it('should accept focusTime eventType', () => {
       expect(() => createEventSchema.parse({
         ...baseEvent,
-        source: { title: 'No URL' }
-      })).toThrow();
+        eventType: 'focusTime'
+      })).not.toThrow();
     });
 
-    it('should reject source without title', () => {
+    it('should accept focusTimeProperties', () => {
       expect(() => createEventSchema.parse({
         ...baseEvent,
-        source: { url: 'https://example.com' }
-      })).toThrow();
-    });
-  });
-
-  describe('Combined Properties', () => {
-    it('should accept event with all enhanced properties', () => {
-      const complexEvent = {
-        ...baseEvent,
-        eventId: 'custom-id-123',
-        description: 'Complex event with all features',
-        location: 'Conference Room',
-        transparency: 'opaque',
-        visibility: 'public',
-        guestsCanInviteOthers: true,
-        guestsCanModify: false,
-        guestsCanSeeOtherGuests: true,
-        anyoneCanAddSelf: false,
-        sendUpdates: 'all',
-        conferenceData: {
-          createRequest: {
-            requestId: 'conf-123',
-            conferenceSolutionKey: { type: 'hangoutsMeet' }
-          }
-        },
-        extendedProperties: {
-          private: { appId: '123' },
-          shared: { category: 'meeting' }
-        },
-        attachments: [
-          { fileUrl: 'https://example.com/agenda.pdf', title: 'Agenda' }
-        ],
-        attendees: [
-          {
-            email: 'alice@example.com',
-            displayName: 'Alice',
-            optional: false,
-            responseStatus: 'accepted'
-          },
-          {
-            email: 'bob@example.com',
-            displayName: 'Bob',
-            optional: true,
-            responseStatus: 'tentative',
-            additionalGuests: 1
-          }
-        ],
-        source: {
-          url: 'https://example.com/source',
-          title: 'Source System'
-        },
-        colorId: '5',
-        reminders: {
-          useDefault: false,
-          overrides: [{ method: 'popup', minutes: 15 }]
+        eventType: 'focusTime',
+        focusTimeProperties: {
+          autoDeclineMode: 'declineAllConflictingInvitations',
+          chatStatus: 'doNotDisturb',
+          declineMessage: 'In focus time'
         }
-      };
-      
-      expect(() => createEventSchema.parse(complexEvent)).not.toThrow();
+      })).not.toThrow();
     });
 
-    it('should maintain backward compatibility with minimal event', () => {
-      // Only required fields
-      const minimalEvent = {
+    it('should reject all-day focusTime events', () => {
+      expect(() => createEventSchema.parse({
         calendarId: 'primary',
-        summary: 'Simple Event',
-        start: '2025-01-20T10:00:00',
-        end: '2025-01-20T11:00:00'
-      };
-      
-      expect(() => createEventSchema.parse(minimalEvent)).not.toThrow();
+        summary: 'Focus Time',
+        start: '2025-01-20',  // All-day format
+        end: '2025-01-21',
+        eventType: 'focusTime'
+      })).toThrow();
     });
   });
 });
